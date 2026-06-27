@@ -1,0 +1,52 @@
+# RestaurantOps customization layer over the stock pwd.yml.
+#
+# Points every frappe/erpnext service at the custom image (restaurantops_erp
+# baked in) and makes a fresh site install the app, so the integration fixtures
+# (custom_external_ref fields + the least-privilege RestaurantOps Integration
+# role and its permissions) apply automatically.
+#
+# Build once, then bring the stack up with both files:
+#   docker build -f restaurantops.Dockerfile -t restaurantops/erpnext:v16.25.0 .
+#   docker compose -f pwd.yml -f restaurantops.override.yml -p erpnext up -d
+#
+# See docs/runbooks/onprem-deployment.md (main repo) for the full procedure,
+# including how to apply it to an already-running stack without data loss.
+services:
+  backend:
+    image: restaurantops/erpnext:v16.25.0
+  configurator:
+    image: restaurantops/erpnext:v16.25.0
+  frontend:
+    image: restaurantops/erpnext:v16.25.0
+  queue-long:
+    image: restaurantops/erpnext:v16.25.0
+  queue-short:
+    image: restaurantops/erpnext:v16.25.0
+  scheduler:
+    image: restaurantops/erpnext:v16.25.0
+  websocket:
+    image: restaurantops/erpnext:v16.25.0
+  create-site:
+    image: restaurantops/erpnext:v16.25.0
+    # Same wait/init as pwd.yml, but new-site installs restaurantops_erp too.
+    # Its fixtures auto-apply during install, so a brand-new deploy already has
+    # the custom fields + integration role/permissions.
+    command:
+      - >
+        wait-for-it -t 120 db:3306;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
+        do
+          echo "Waiting for sites/common_site_config.json to be created";
+          sleep 5;
+          if (( `date +%s`-start > 120 )); then
+            echo "could not find sites/common_site_config.json with required keys";
+            exit 1
+          fi
+        done;
+        echo "sites/common_site_config.json found";
+        bench new-site --mariadb-user-host-login-scope='%' --admin-password=admin --db-root-username=root --db-root-password=admin --install-app erpnext --install-app restaurantops_erp --set-default frontend;
